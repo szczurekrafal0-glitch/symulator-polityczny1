@@ -2148,7 +2148,10 @@ function buildInitialState(config) {
 
   const rawPolls = {};
   parties.forEach((p) => (rawPolls[p.id] = Math.max(0.01, p.start)));
-  const startPolls = normalize(rawPolls);
+  // „Kumulacja” zawiera już dokładnie średnie wartości (suma / 30), więc
+  // nie przeskalowujemy ich ponownie do 100%. Pozostałe szablony zachowują
+  // dotychczasowe zachowanie z normalizacją sondaży startowych.
+  const startPolls = config.preservePollValues ? { ...rawPolls } : normalize(rawPolls);
 
   const sejmThreshold = Number.isFinite(Number(config.settings?.sejmThreshold)) ? Number(config.settings.sejmThreshold) : 5;
   const epThreshold = Number.isFinite(Number(config.settings?.epThreshold)) ? Number(config.settings.epThreshold) : 5;
@@ -2209,6 +2212,8 @@ function buildInitialState(config) {
       dissolutionChance: config.settings?.dissolutionChance ?? 15,
       newPartiesEnabled: !!config.settings?.newPartiesEnabled,
       newPartiesChance: config.settings?.newPartiesChance ?? 5,
+      randomEventsEnabled: config.settings?.randomEventsEnabled !== false,
+      randomEventsChance: config.settings?.randomEventsChance ?? 18,
       sejmThreshold,
       epThreshold,
       // §29: w trybie symulacji gracz może wyłączyć zatrzymywanie się szybkiej
@@ -3195,6 +3200,85 @@ const TEMPLATES = [
 // Zbiorcza pula wszystkich partii występujących w powyższych szablonach historycznych
 // (bez duplikatów po nazwie) — używana przez tryb "nowe partie" (losowe dołączanie
 // partii spoza aktywnego szablonu) oraz przez generator losowego szablonu poniżej.
+// Dodatkowe, nowe partie spoza szablonów historycznych — trafiają do tej samej puli
+// (tryb "nowych partii" oraz szablon losowy). Część to realne ugrupowania z ostatnich lat,
+// reszta to partie fikcyjne dla większej nieprzewidywalności sceny politycznej.
+// ---------------------------------------------------------------------------
+// SZABLON „KUMULACJA” — średnie poparcie ze wszystkich 30 scenariuszy
+// ---------------------------------------------------------------------------
+// Bierze UNIĘ wszystkich partii występujących w TEMPLATES. Dla każdej partii
+// sumuje jej poparcie startowe ze wszystkich scenariuszy, w których występuje,
+// a następnie dzieli tę sumę przez 30 — liczbę scenariuszy historycznych.
+// Jeśli partia nie występuje w danym scenariuszu, jej udział w tej sumie wynosi 0.
+const KUMULACJA_SCENARIO_COUNT = 30;
+
+const KUMULACJA_TEMPLATE = (() => {
+  const aggregated = new Map();
+
+  TEMPLATES.forEach((tpl) => {
+    tpl.parties.forEach((p) => {
+      const existing = aggregated.get(p.name);
+      if (existing) {
+        existing.start += Number(p.start) || 0;
+        existing.minority = existing.minority || !!p.minority;
+      } else {
+        aggregated.set(p.name, {
+          name: p.name,
+          full: p.full || p.name,
+          bloc: p.bloc,
+          start: Number(p.start) || 0,
+          minority: !!p.minority,
+        });
+      }
+    });
+  });
+
+  const parties = Array.from(aggregated.values())
+    .map((p) => ({
+      ...p,
+      start: Math.round((p.start / KUMULACJA_SCENARIO_COUNT) * 100) / 100,
+    }))
+    .sort((a, b) => b.start - a.start);
+
+  return {
+    key: "kumulacja",
+    label: "Kumulacja",
+    sub: "średnie poparcie ze wszystkich 30 scenariuszy",
+    startDate: { month: 1, year: 2025 },
+    president: { name: "Prezydent RP", note: "scenariusz zbiorczy" },
+    schedule: initialSchedule({ month: 1, year: 2025 }),
+    parties,
+    preservePollValues: true,
+  };
+})();
+
+const EXTRA_PARTY_POOL = [
+  { name: "PL2050", full: "Polska 2050", bloc: "centrum" },
+  { name: "NL", full: "Nowa Lewica", bloc: "centrolewica" },
+  { name: "Porozumienie", full: "Porozumienie", bloc: "centroprawica" },
+  { name: "Republikanie", full: "Republikanie", bloc: "prawica" },
+  { name: "TAK!", full: "Ruch Samorządowy Tak! Dla Polski", bloc: "centrum" },
+  { name: "PPS+", full: "Polska Partia Socjalistyczna – Odnowa", bloc: "lewica" },
+  { name: "RW", full: "Ruch Wolnościowy", bloc: "prawica" },
+  { name: "ZR", full: "Zielona Rewolucja", bloc: "lewica" },
+  { name: "UCP", full: "Unia Cyfrowa Polski", bloc: "centrum" },
+  { name: "FNO", full: "Front Narodowej Odbudowy", bloc: "skrajna_prawica" },
+  { name: "PRR", full: "Partia Rozsądku i Reform", bloc: "centroprawica" },
+  { name: "LR", full: "Liga Regionów", bloc: "centrum" },
+  { name: "SSP", full: "Sojusz Sprawiedliwości Społecznej", bloc: "centrolewica" },
+  { name: "RWP", full: "Ruch Wolnych Polaków", bloc: "skrajna_prawica" },
+  { name: "PRS", full: "Partia Rodziny i Społeczeństwa", bloc: "prawica" },
+  { name: "AK", full: "Alternatywa Klimatyczna", bloc: "centrolewica" },
+  { name: "UMP", full: "Unia Młodych Przedsiębiorców", bloc: "centroprawica" },
+  { name: "FPL", full: "Front Pracy i Lewicy", bloc: "skrajna_lewica" },
+  { name: "SOR", full: "Stowarzyszenie Obywatelskiej Reformy", bloc: "centrum" },
+  { name: "KS", full: "Koalicja Seniorów", bloc: "centrum" },
+  { name: "WP", full: "Wspólnota Podhala i Gór", bloc: "prawica" },
+  { name: "PZR", full: "Partia Zrównoważonego Rozwoju", bloc: "centrolewica" },
+  { name: "NRP", full: "Narodowy Ruch Patriotyczny", bloc: "skrajna_prawica" },
+  { name: "KRL", full: "Komitet Robotniczej Lewicy", bloc: "skrajna_lewica" },
+];
+
 const GLOBAL_PARTY_POOL = (() => {
   const seen = new Map();
   TEMPLATES.forEach((tpl) => {
@@ -3202,8 +3286,262 @@ const GLOBAL_PARTY_POOL = (() => {
       if (!seen.has(p.name)) seen.set(p.name, p);
     });
   });
+  EXTRA_PARTY_POOL.forEach((p) => {
+    if (!seen.has(p.name)) seen.set(p.name, p);
+  });
   return Array.from(seen.values());
 })();
+
+// Pula do wyszukiwarki partii na ekranie konfiguracji: wszystkie partie dostępne
+// w szablonach (+ dodatkowe), z domyślnym poparciem = średnia z „Kumulacji”
+// (partie spoza szablonów historycznych dostają 1%).
+const KUMULACJA_AVG_BY_NAME = Object.fromEntries(KUMULACJA_TEMPLATE.parties.map((p) => [p.name, p.start]));
+const SEARCHABLE_PARTY_POOL = GLOBAL_PARTY_POOL.map((p) => ({
+  name: p.name,
+  full: p.full || p.name,
+  bloc: p.bloc,
+  minority: !!p.minority,
+  avg: Math.max(0.01, KUMULACJA_AVG_BY_NAME[p.name] ?? 1),
+}));
+
+function searchNormalize(str) {
+  return String(str || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ł/g, "l");
+}
+
+// Generator całkowicie fikcyjnych partii — losowe połączenie członu organizacyjnego
+// i hasła programowego, z blokiem ideologicznym dopasowanym do hasła.
+const FICTIONAL_PARTY_FORMS = ["Partia", "Ruch", "Sojusz", "Unia", "Front", "Forum", "Koalicja", "Stronnictwo"];
+const FICTIONAL_PARTY_THEMES = [
+  { text: "Nowej Polski", bloc: "centrum" },
+  { text: "Wolnych Obywateli", bloc: "prawica" },
+  { text: "Zielonej Przyszłości", bloc: "centrolewica" },
+  { text: "Sprawiedliwości Społecznej", bloc: "lewica" },
+  { text: "Rodzin i Tradycji", bloc: "prawica" },
+  { text: "Cyfrowego Rozwoju", bloc: "centroprawica" },
+  { text: "Polskiej Wsi", bloc: "centrum" },
+  { text: "Suwerennej Polski", bloc: "skrajna_prawica" },
+  { text: "Pracy i Godności", bloc: "lewica" },
+  { text: "Wielkich Miast", bloc: "centrolewica" },
+  { text: "Przedsiębiorczych", bloc: "centroprawica" },
+  { text: "Radykalnej Zmiany", bloc: "skrajna_lewica" },
+  { text: "Ziem Zachodnich", bloc: "centrum" },
+  { text: "Narodowego Odrodzenia", bloc: "skrajna_prawica" },
+  { text: "Mieszkań dla Wszystkich", bloc: "centrolewica" },
+  { text: "Bezpieczeństwa Obywateli", bloc: "prawica" },
+];
+
+function generateFictionalParty(existingNames) {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const form = pickOne(FICTIONAL_PARTY_FORMS);
+    const theme = pickOne(FICTIONAL_PARTY_THEMES);
+    const full = `${form} ${theme.text}`;
+    const abbr = full
+      .split(" ")
+      .map((w) => w[0].toUpperCase())
+      .join("");
+    if (!existingNames.has(abbr) && !existingNames.has(full)) {
+      return { name: abbr, full, bloc: theme.bloc };
+    }
+  }
+  const n = Math.floor(Math.random() * 900) + 100;
+  return { name: `NP${n}`, full: `Nowa Partia ${n}`, bloc: pickOne(BLOC_KEYS) };
+}
+
+// ---------------------------------------------------------------------------
+// NIEPRZEWIDYWALNE WYDARZENIA LOSOWE (poziom całej sceny politycznej)
+// ---------------------------------------------------------------------------
+// Działają niezależnie od pojedynczych szoków z maybeShock(): dotyczą rządu,
+// opozycji, całych bloków ideologicznych, rozłamów i fuzji partii oraz rzadkich
+// "czarnych łabędzi". Każde wydarzenie zwraca zaktualizowane sondaże i opis do
+// kroniki; może też dopisać nową partię do registry (rozłam, outsider).
+
+function applyPollDeltas(polls, deltas) {
+  const next = { ...polls };
+  Object.keys(deltas).forEach((id) => {
+    if (next[id] !== undefined) next[id] = Math.max(0.05, next[id] + deltas[id]);
+  });
+  return normalize(next);
+}
+
+function rr(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function partiesInBlocs(ctx, blocs) {
+  return ctx.active.filter((p) => blocs.includes(p.bloc)).map((p) => p.id);
+}
+
+function spreadDelta(ids, min, max, sign = 1) {
+  const out = {};
+  ids.forEach((id) => { out[id] = sign * rr(min, max); });
+  return out;
+}
+
+function registerNewParty(ctx, def, startShare) {
+  const id = uniqueId(slugify(def.name), Object.keys(ctx.registry));
+  const color = randomColor(Object.values(ctx.registry).map((p) => p.color));
+  ctx.registry[id] = { id, name: def.name, full: def.full, color, bloc: def.bloc, minority: false };
+  const polls = addPollEntry(ctx.polls, id, startShare);
+  return { id, polls };
+}
+
+const RANDOM_WORLD_EVENTS = [
+  {
+    id: "economic_crisis", weight: 3,
+    apply: (ctx) => {
+      const gov = ctx.govIds.length ? spreadDelta(ctx.govIds, 1.5, 4, -1) : {};
+      const opp = spreadDelta(ctx.oppIds, 0.3, 1.2, 1);
+      return { polls: applyPollDeltas(ctx.polls, { ...opp, ...gov }), note: "Nagłe załamanie gospodarcze — rząd traci w sondażach, opozycja korzysta." };
+    },
+  },
+  {
+    id: "economic_boom", weight: 2,
+    apply: (ctx) => {
+      if (!ctx.govIds.length) return null;
+      return { polls: applyPollDeltas(ctx.polls, spreadDelta(ctx.govIds, 1, 3, 1)), note: "Nieoczekiwany boom gospodarczy umacnia pozycję partii rządzących." };
+    },
+  },
+  {
+    id: "security_crisis", weight: 2,
+    apply: (ctx) => {
+      const right = spreadDelta(partiesInBlocs(ctx, RIGHT_AXIS_BLOCS), 0.6, 2.5, 1);
+      const left = spreadDelta(partiesInBlocs(ctx, ["skrajna_lewica", "lewica"]), 0.3, 1.2, -1);
+      return { polls: applyPollDeltas(ctx.polls, { ...left, ...right }), note: "Kryzys bezpieczeństwa u granic — wyborcy skłaniają się ku ugrupowaniom twardej ręki." };
+    },
+  },
+  {
+    id: "mass_protests", weight: 2,
+    apply: (ctx) => {
+      const gov = ctx.govIds.length ? spreadDelta(ctx.govIds, 1, 3, -1) : {};
+      const edges = spreadDelta(partiesInBlocs(ctx, ["skrajna_lewica", "skrajna_prawica"]), 0.4, 1.5, 1);
+      return { polls: applyPollDeltas(ctx.polls, { ...edges, ...gov }), note: "Masowe protesty na ulicach miast osłabiają rząd i wzmacniają ugrupowania antysystemowe." };
+    },
+  },
+  {
+    id: "migration_crisis", weight: 2,
+    apply: (ctx) => {
+      const right = spreadDelta(partiesInBlocs(ctx, ["prawica", "skrajna_prawica"]), 1, 3.5, 1);
+      const left = spreadDelta(partiesInBlocs(ctx, ["lewica", "centrolewica"]), 0.3, 1.5, -1);
+      return { polls: applyPollDeltas(ctx.polls, { ...left, ...right }), note: "Kryzys migracyjny rozpala debatę publiczną i podbija notowania partii prawicowych." };
+    },
+  },
+  {
+    id: "climate_disaster", weight: 1,
+    apply: (ctx) => {
+      const left = spreadDelta(partiesInBlocs(ctx, ["lewica", "centrolewica"]), 0.6, 2.2, 1);
+      const gov = ctx.govIds.length ? spreadDelta(ctx.govIds, 0.3, 1.2, -1) : {};
+      return { polls: applyPollDeltas(ctx.polls, { ...left, ...gov }), note: "Klęska żywiołowa (powódź/susza) przesuwa debatę ku polityce klimatycznej i pomocy państwa." };
+    },
+  },
+  {
+    id: "polarization_wave", weight: 1,
+    apply: (ctx) => {
+      const edges = spreadDelta(partiesInBlocs(ctx, ["skrajna_lewica", "skrajna_prawica", "lewica", "prawica"]), 0.4, 1.6, 1);
+      const center = spreadDelta(partiesInBlocs(ctx, ["centrum", "centrolewica", "centroprawica"]), 0.3, 1.2, -1);
+      return { polls: applyPollDeltas(ctx.polls, { ...center, ...edges }), note: "Fala polaryzacji — wyborcy uciekają z centrum ku silniejszym, skrajniejszym przekazom." };
+    },
+  },
+  {
+    id: "leader_resigns", weight: 2,
+    apply: (ctx) => {
+      const p = pickOne(ctx.active);
+      return { polls: applyPollDeltas(ctx.polls, { [p.id]: -rr(1.5, 4) }), note: `Niespodziewana rezygnacja lidera partii ${p.full} pogrąża ugrupowanie w chaosie.` };
+    },
+  },
+  {
+    id: "new_charismatic_leader", weight: 2,
+    apply: (ctx) => {
+      const p = pickOne(ctx.active);
+      return { polls: applyPollDeltas(ctx.polls, { [p.id]: rr(1.5, 4.5) }), note: `Charyzmatyczny nowy lider elektryzuje wyborców — ${p.full} zyskuje w sondażach.` };
+    },
+  },
+  {
+    id: "major_scandal", weight: 2, major: true,
+    apply: (ctx) => {
+      const sorted = [...ctx.active].sort((a, b) => ctx.polls[b.id] - ctx.polls[a.id]);
+      const p = Math.random() < 0.6 ? sorted[0] : pickOne(ctx.active);
+      return { polls: applyPollDeltas(ctx.polls, { [p.id]: -rr(3, 7) }), note: `Gigantyczna afera wstrząsa ${p.full} — dziennikarze ujawniają kolejne materiały.` };
+    },
+  },
+  {
+    id: "party_split", weight: 2, major: true,
+    condition: (ctx) => ctx.active.some((p) => (ctx.polls[p.id] || 0) >= 6),
+    apply: (ctx) => {
+      const eligible = ctx.active.filter((p) => (ctx.polls[p.id] || 0) >= 6);
+      const parent = pickOne(eligible);
+      const share = rr(0.25, 0.45);
+      const taken = ctx.polls[parent.id] * share;
+      const names = new Set(Object.values(ctx.registry).map((p) => p.name));
+      let newName = `Nowa ${parent.name}`;
+      let k = 2;
+      while (names.has(newName)) newName = `Nowa ${parent.name} ${k++}`;
+      // rozłamowcy zwykle przesuwają się o jeden stopień na osi ideologicznej
+      const rank = BLOC_RANK[parent.bloc] ?? 3;
+      const shift = Math.random() < 0.5 ? -1 : 1;
+      const newBloc = BLOC_KEYS[clamp(rank + (Math.random() < 0.4 ? shift : 0), 0, BLOC_KEYS.length - 1)];
+      const { id, polls } = registerNewParty(ctx, { name: newName, full: `Nowa ${parent.full} (rozłamowcy)`, bloc: newBloc }, taken);
+      // addPollEntry zabiera proporcjonalnie wszystkim — dociągamy część od macierzystej partii
+      const adjusted = applyPollDeltas(polls, { [parent.id]: -taken * 0.6 });
+      return { polls: adjusted, note: `Rozłam w partii ${parent.full}! Grupa rozłamowców zakłada nowe ugrupowanie „${ctx.registry[id].full}”.`, createdPartyId: id };
+    },
+  },
+  {
+    id: "party_merger", weight: 1, major: true,
+    condition: (ctx) => {
+      if (ctx.active.length < 4) return false;
+      return ctx.active.some((a) => ctx.active.some((b) => a.id !== b.id && a.bloc === b.bloc &&
+        (ctx.polls[a.id] || 0) < 8 && (ctx.polls[b.id] || 0) < 8 &&
+        !ctx.protectedIds.includes(a.id) && !ctx.protectedIds.includes(b.id)));
+    },
+    apply: (ctx) => {
+      const pairs = [];
+      ctx.active.forEach((a) => ctx.active.forEach((b) => {
+        if (a.id < b.id && a.bloc === b.bloc && (ctx.polls[a.id] || 0) < 8 && (ctx.polls[b.id] || 0) < 8 &&
+          !ctx.protectedIds.includes(a.id) && !ctx.protectedIds.includes(b.id)) pairs.push([a, b]);
+      }));
+      if (!pairs.length) return null;
+      const [x, y] = pickOne(pairs);
+      const [big, small] = (ctx.polls[x.id] || 0) >= (ctx.polls[y.id] || 0) ? [x, y] : [y, x];
+      const merged = { ...ctx.polls, [big.id]: ctx.polls[big.id] + ctx.polls[small.id] * rr(0.9, 1.15) };
+      delete merged[small.id];
+      return { polls: normalize(merged), note: `Fuzja: ${small.full} łączy się z ${big.full} — ugrupowanie ${small.name} znika z sondaży.` };
+    },
+  },
+  {
+    id: "black_swan_outsider", weight: 1, major: true,
+    apply: (ctx) => {
+      const names = new Set(Object.values(ctx.registry).map((p) => p.name));
+      const def = generateFictionalParty(names);
+      const { id, polls } = registerNewParty(ctx, def, rr(4, 9));
+      return { polls, note: `Czarny łabędź: znikąd wyłania się ruch outsiderów „${ctx.registry[id].full}” i z miejsca zdobywa duże poparcie.`, createdPartyId: id };
+    },
+  },
+  {
+    id: "black_swan_collapse", weight: 1, major: true,
+    apply: (ctx) => {
+      const biggest = [...ctx.active].sort((a, b) => ctx.polls[b.id] - ctx.polls[a.id])[0];
+      return { polls: applyPollDeltas(ctx.polls, { [biggest.id]: -rr(6, 10) }), note: `Czarny łabędź: dramatyczny kryzys uderza w największą partię — ${biggest.full} traci grunt pod nogami.` };
+    },
+  },
+];
+
+// Losuje (ważone) jedno dostępne wydarzenie i je stosuje. Zwraca
+// { polls, notes: [{text, major}] } albo null, jeśli nic się nie wydarzyło.
+function rollRandomWorldEvent(polls, registry, government, protectedIds = []) {
+  const active = Object.keys(polls).filter((id) => registry[id]).map((id) => registry[id]);
+  if (active.length < 2) return null;
+  const govIds = ((government && government.coalition) || []).filter((id) => polls[id] !== undefined);
+  const oppIds = active.map((p) => p.id).filter((id) => !govIds.includes(id));
+  const ctx = { polls, registry, active, govIds, oppIds, protectedIds };
+  const candidates = RANDOM_WORLD_EVENTS.filter((e) => !e.condition || e.condition(ctx));
+  const weighted = [];
+  candidates.forEach((e) => { for (let i = 0; i < (e.weight || 1); i++) weighted.push(e); });
+  if (!weighted.length) return null;
+  const evt = pickOne(weighted);
+  const result = evt.apply(ctx);
+  if (!result) return null;
+  return { polls: result.polls, notes: [{ text: result.note, major: !!evt.major, id: evt.id }] };
+}
 
 function pickRandom(arr, n) {
   const pool = [...arr];
@@ -3619,26 +3957,44 @@ function FeedbackWidget() {
 // Hasło odblokowujące tryb gracza na ekranie startowym (wersja beta).
 // Usuń PLAYER_MODE_PASSWORD i blokadę w SetupScreen, gdy tryb będzie gotowy.
 const PLAYER_MODE_PASSWORD = "102528";
-const PLAYER_MODE_UNLOCK_KEY = "polsim_player_mode_unlocked";
+const PLAYER_MODE_UNLOCK_KEY = "polsim_player_mode_unlocked"; // stary klucz — czyszczony, odblokowanie nie jest już zapamiętywane
 
-function readPlayerModeUnlocked() {
-  try {
-    return window.localStorage.getItem(PLAYER_MODE_UNLOCK_KEY) === "1";
-  } catch (e) {
-    return false;
+// Odblokowanie trwa tylko do odświeżenia strony (zmienna w pamięci) — nie jest
+// zapisywane w localStorage, więc po każdym wejściu do gry hasło trzeba podać ponownie.
+let playerModeUnlockedThisSession = false;
+try { window.localStorage.removeItem(PLAYER_MODE_UNLOCK_KEY); } catch (e) { /* brak localStorage */ }
+
+function isPlayerModeUnlocked() {
+  return playerModeUnlockedThisSession;
+}
+
+function unlockPlayerMode(password) {
+  if (String(password).trim() === PLAYER_MODE_PASSWORD) {
+    playerModeUnlockedThisSession = true;
+    return true;
   }
+  return false;
+}
+
+// Zapisy/importy w trybie gracza też wymagają hasła — inaczej dałoby się obejść blokadę
+// wczytując zapis albo „Kontynuuj ostatnią grę” z trybu gracza.
+function requirePlayerModeAccess(st) {
+  if (!st || st.gameMode !== "player" || isPlayerModeUnlocked()) return true;
+  const pw = window.prompt("Ten zapis używa trybu gracza (w budowie). Podaj hasło, aby go wczytać:");
+  if (pw !== null && unlockPlayerMode(pw)) return true;
+  alert("Nieprawidłowe hasło — tryb gracza pozostaje zablokowany.");
+  return false;
 }
 
 function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave, onImportFile }) {
-  const [playerModeUnlocked, setPlayerModeUnlocked] = useState(() => readPlayerModeUnlocked());
+  const [playerModeUnlocked, setPlayerModeUnlocked] = useState(() => isPlayerModeUnlocked());
   const [passwordPromptOpen, setPasswordPromptOpen] = useState(false);
   const [passwordDraft, setPasswordDraft] = useState("");
   const [passwordError, setPasswordError] = useState(false);
 
   function submitPassword() {
-    if (passwordDraft.trim() === PLAYER_MODE_PASSWORD) {
+    if (unlockPlayerMode(passwordDraft)) {
       setPlayerModeUnlocked(true);
-      try { window.localStorage.setItem(PLAYER_MODE_UNLOCK_KEY, "1"); } catch (e) { /* pomijamy */ }
       setPasswordPromptOpen(false);
       setPasswordDraft("");
       setPasswordError(false);
@@ -3658,6 +4014,8 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
 
   const [parties, setParties] = useState([]);
   const [draft, setDraft] = useState({ name: "", full: "", bloc: "centrum", color: PALETTE[0], start: "5", minority: false });
+  const [partySearch, setPartySearch] = useState("");
+  const [partySearchStart, setPartySearchStart] = useState("");
 
   // Liczba mandatów w Sejmie — domyślnie ustawowe 460, ale gracz może to
   // zmienić przed startem gry (np. symulacja innego systemu wyborczego).
@@ -3668,6 +4026,8 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
     dissolutionChance: 15,
     newPartiesEnabled: false,
     newPartiesChance: 5,
+    randomEventsEnabled: true,
+    randomEventsChance: 18,
     sejmThreshold: 5,
     epThreshold: 5,
   });
@@ -3779,6 +4139,30 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
     setActiveTemplateKey(null);
   }
 
+  // Dodaje partię znalezioną w wyszukiwarce (pula partii ze wszystkich szablonów).
+  // Nie zmienia aktywnego szablonu — partia trafia do scenariusza, który budujemy.
+  function addPoolParty(entry) {
+    if (parties.some((p) => p.name === entry.name)) return;
+    const override = parseFloat(String(partySearchStart).replace(",", "."));
+    const startVal = Number.isFinite(override) && override > 0 ? override : entry.avg;
+    setParties((prev) => {
+      const id = uniqueId(slugify(entry.name), prev.map((p) => p.id));
+      return [
+        ...prev,
+        { id, name: entry.name, full: entry.full, color: randomColor(prev.map((p) => p.color)), bloc: entry.bloc, start: startVal, minority: entry.minority },
+      ];
+    });
+  }
+
+  const partySearchResults = useMemo(() => {
+    const q = searchNormalize(partySearch.trim());
+    if (!q) return [];
+    return SEARCHABLE_PARTY_POOL
+      .filter((p) => searchNormalize(p.name).includes(q) || searchNormalize(p.full).includes(q))
+      .sort((a, b) => b.avg - a.avg)
+      .slice(0, 12);
+  }, [partySearch]);
+
   function removePartyDraft(id) {
     setParties((prev) => prev.filter((p) => p.id !== id));
     setActiveTemplateKey(null);
@@ -3786,6 +4170,29 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
 
   function changePartyDraftColor(id, newColor) {
     setParties((prev) => prev.map((p) => (p.id === id ? { ...p, color: newColor } : p)));
+  }
+
+  // Edycja partii już po dodaniu jej do konfiguracji. ID pozostaje niezmienne,
+  // dzięki czemu zmiana skrótu/nazwy nie rozrywa późniejszych odwołań w grze.
+  function changePartyDraftField(id, field, value) {
+    setParties((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: value } : p)));
+    setActiveTemplateKey(null);
+  }
+
+  function changePartyDraftStart(id, value) {
+    const normalized = String(value).replace(',', '.');
+    if (normalized === '' || /^\d*(?:\.\d*)?$/.test(normalized)) {
+      setParties((prev) => prev.map((p) => (p.id === id ? { ...p, start: normalized } : p)));
+      setActiveTemplateKey(null);
+    }
+  }
+
+  function commitPartyDraftStart(id) {
+    setParties((prev) => prev.map((p) => {
+      if (p.id !== id) return p;
+      const parsed = parseFloat(String(p.start).replace(',', '.'));
+      return { ...p, start: Number.isFinite(parsed) ? Math.max(0.01, Math.min(90, parsed)) : 0.01 };
+    }));
   }
 
   const canStart =
@@ -3802,6 +4209,7 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
       president: { name: president.name.trim(), note: president.note.trim() },
       settings,
       sejmSeatsTotal,
+      preservePollValues: activeTemplateKey === "kumulacja",
       gameMode,
       playerConfig: gameMode === "player" ? { ...playerConfig, name: playerConfig.name.trim() } : null,
     });
@@ -4168,6 +4576,13 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <button
+              onClick={() => applyTemplate(KUMULACJA_TEMPLATE)}
+              className="text-left rounded-md p-3 border border-dashed border-amber-500/50 bg-amber-500/5 hover:border-amber-400 transition-colors"
+            >
+              <p className="text-amber-300 text-sm font-medium flex items-center gap-1.5">📊 Kumulacja</p>
+              <p className="text-slate-500 text-xs mt-0.5">wszystkie partie · suma poparcia / 30 scenariuszy</p>
+            </button>
+            <button
               onClick={() => applyTemplate(buildRandomTemplate())}
               className="text-left rounded-md p-3 border border-dashed border-purple-500/50 bg-purple-500/5 hover:border-purple-400 transition-colors"
             >
@@ -4300,6 +4715,56 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
           <div className="flex items-center gap-2 text-sm uppercase tracking-wide text-slate-400 mb-3">
             <Plus size={14} /> Dodaj partię do gry
           </div>
+
+          <div className="mb-4 pb-4 border-b border-slate-800">
+            <label className="block text-xs text-slate-500 mb-1">Wyszukaj partię z szablonów historycznych</label>
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                value={partySearch}
+                onChange={(e) => setPartySearch(e.target.value)}
+                placeholder="np. Samoobrona, PSL, Unia Wolności..."
+                className="flex-1 min-w-[200px] bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200"
+              />
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                max="90"
+                value={partySearchStart}
+                onChange={(e) => setPartySearchStart(e.target.value)}
+                placeholder="poparcie % (opcj.)"
+                className="w-40 bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200"
+              />
+            </div>
+            <p className="text-[11px] text-slate-600 mt-1">
+              Puste poparcie = średnia z „Kumulacji" (suma ze wszystkich scenariuszy ÷ 30).
+            </p>
+            {partySearch.trim() && (
+              <div className="mt-2 space-y-1.5">
+                {partySearchResults.length === 0 && <p className="text-xs text-slate-600">Brak wyników.</p>}
+                {partySearchResults.map((r) => {
+                  const added = parties.some((p) => p.name === r.name);
+                  return (
+                    <div key={r.name} className="flex items-center gap-2 text-sm bg-slate-950 border border-slate-800 rounded-md px-3 py-1.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-slate-200 truncate">{r.name} <span className="text-slate-500 text-xs">— {r.full}</span></p>
+                        <p className="text-slate-600 text-xs">{BLOC_LABELS[r.bloc] || r.bloc}{r.minority ? " · mniejszość narodowa" : ""}</p>
+                      </div>
+                      <span className="font-mono text-xs text-slate-500">śr. {r.avg}%</span>
+                      <button
+                        onClick={() => addPoolParty(r)}
+                        disabled={added}
+                        className="flex items-center gap-1 px-3 py-1 rounded-md bg-red-600 hover:bg-red-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-medium transition-colors"
+                      >
+                        {added ? "Dodana" : <><Plus size={12} /> Dodaj</>}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
             <div>
               <label className="block text-xs text-slate-500 mb-1">Skrót nazwy</label>
@@ -4389,27 +4854,64 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
                   {inBloc.length === 0 && <p className="text-xs text-slate-700 italic">brak partii</p>}
                   <div className="space-y-1.5">
                     {inBloc.map((p) => (
-                      <div key={p.id} className="flex items-center gap-2 text-sm">
-                        <input
-                          type="color"
-                          value={p.color}
-                          onChange={(e) => changePartyDraftColor(p.id, e.target.value)}
-                          title="Zmień kolor partii"
-                          className="w-3.5 h-3.5 shrink-0 rounded-full border border-slate-700 bg-transparent cursor-pointer p-0 overflow-hidden [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-full"
-                        />
-                        <span className="flex-1 truncate text-slate-300">{p.name}</span>
-                        {p.minority && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30" title="Zwolniona z progu wyborczego do Sejmu">
-                            MN
-                          </span>
-                        )}
-                        <span className="font-mono text-xs text-slate-500">{p.start}%</span>
-                        <button
-                          onClick={() => removePartyDraft(p.id)}
-                          className="p-1 rounded-md text-slate-500 hover:text-red-400 hover:bg-slate-800 transition-colors"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                      <div key={p.id} className="rounded-md border border-slate-800 bg-slate-900/60 p-2.5">
+                        <div className="grid grid-cols-1 md:grid-cols-[auto_1fr_1.7fr_100px_auto] gap-2 items-center">
+                          <input
+                            type="color"
+                            value={p.color}
+                            onChange={(e) => changePartyDraftColor(p.id, e.target.value)}
+                            title="Zmień kolor partii"
+                            className="w-7 h-7 shrink-0 rounded-full border border-slate-700 bg-transparent cursor-pointer p-0 overflow-hidden [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-full"
+                          />
+                          <div>
+                            <label className="block text-[10px] uppercase tracking-wide text-slate-600 mb-0.5">Skrót</label>
+                            <input
+                              type="text"
+                              value={p.name}
+                              onChange={(e) => changePartyDraftField(p.id, "name", e.target.value)}
+                              placeholder="np. KO"
+                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-sm font-medium text-slate-200 focus:outline-none focus:border-red-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] uppercase tracking-wide text-slate-600 mb-0.5">Pełna nazwa</label>
+                            <input
+                              type="text"
+                              value={p.full}
+                              onChange={(e) => changePartyDraftField(p.id, "full", e.target.value)}
+                              placeholder="Pełna nazwa partii"
+                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-red-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] uppercase tracking-wide text-slate-600 mb-0.5">Poparcie %</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0.01"
+                              max="90"
+                              value={p.start}
+                              onChange={(e) => changePartyDraftStart(p.id, e.target.value)}
+                              onBlur={() => commitPartyDraftStart(p.id)}
+                              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-sm font-mono text-slate-200 focus:outline-none focus:border-red-500"
+                            />
+                          </div>
+                          <div className="flex items-center justify-end gap-1">
+                            {p.minority && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30" title="Zwolniona z progu wyborczego do Sejmu">
+                                MN
+                              </span>
+                            )}
+                            <button
+                              onClick={() => removePartyDraft(p.id)}
+                              title="Usuń partię"
+                              className="p-1.5 rounded-md text-slate-500 hover:text-red-400 hover:bg-slate-800 transition-colors"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -4418,8 +4920,9 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
             })}
           </div>
           <p className="text-xs text-slate-600 mt-3">
-            Wpisane wartości poparcia startowego zostaną automatycznie znormalizowane do sumy 100%. Do rozpoczęcia gry
-            potrzebne są co najmniej 2 partie.
+            Po dodaniu partii możesz tutaj zmieniać jej <span className="text-slate-500">skrót, pełną nazwę, kolor i poparcie startowe</span>.
+            Zmiana nazwy nie zmienia wewnętrznego ID partii, więc nie psuje jej późniejszych danych w symulacji. Wpisane wartości
+            poparcia startowego zostaną automatycznie znormalizowane do sumy 100%. Do rozpoczęcia gry potrzebne są co najmniej 2 partie.
           </p>
         </div>
 
@@ -4554,6 +5057,30 @@ function SetupScreen({ onStart, autosave, saves, onContinueAutosave, onLoadSave,
                       type="number" min="0" max="100" step="1"
                       value={settings.newPartiesChance}
                       onChange={(e) => setSettings((s) => ({ ...s, newPartiesChance: Number(e.target.value) }))}
+                      className="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200"
+                    /> %
+                  </span>
+                )}
+              </span>
+            </label>
+
+            <label className="flex items-start gap-2 text-sm text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={settings.randomEventsEnabled}
+                onChange={(e) => setSettings((s) => ({ ...s, randomEventsEnabled: e.target.checked }))}
+                className="w-3.5 h-3.5 mt-0.5 rounded border-slate-700 bg-slate-800 accent-red-600"
+              />
+              <span className="flex-1">
+                <span className="font-medium">Nieprzewidywalne wydarzenia losowe</span> — kryzysy gospodarcze i
+                bezpieczeństwa, protesty, rozłamy i fuzje partii oraz rzadkie „czarne łabędzie” zmieniające scenę polityczną.
+                {settings.randomEventsEnabled && (
+                  <span className="flex items-center gap-2 mt-1.5">
+                    Szansa na miesiąc:
+                    <input
+                      type="number" min="0" max="100" step="1"
+                      value={settings.randomEventsChance}
+                      onChange={(e) => setSettings((s) => ({ ...s, randomEventsChance: Number(e.target.value) }))}
                       className="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200"
                     /> %
                   </span>
@@ -5338,7 +5865,7 @@ export default function PolskiSymulatorPolityczny() {
   function loadSavedGame(name) {
     setSaves((prev) => {
       const entry = prev[name];
-      if (entry) {
+      if (entry && requirePlayerModeAccess(entry.state)) {
         setState(migrateGameState(entry.state));
         setActiveTab("panel");
       }
@@ -5374,6 +5901,7 @@ export default function PolskiSymulatorPolityczny() {
     reader.onload = () => {
       try {
         const parsed = JSON.parse(String(reader.result));
+        if (!requirePlayerModeAccess(parsed)) return;
         setState(migrateGameState(parsed));
         setActiveTab("panel");
       } catch (e) {
@@ -5470,6 +5998,22 @@ export default function PolskiSymulatorPolityczny() {
       }
 
       if (note) log.push({ date: fmtDate(newDate), text: `📰 ${note}` });
+
+      // Nieprzewidywalne wydarzenia losowe całej sceny (kryzysy, rozłamy, fuzje, "czarne łabędzie").
+      // Domyślnie włączone — w starszych zapisach brak ustawienia traktujemy jak "włączone".
+      if (settings.randomEventsEnabled !== false && Math.random() * 100 < (settings.randomEventsChance ?? 18)) {
+        const protectedIds = prev.player && prev.player.partyId ? [prev.player.partyId] : [];
+        const rounds = Math.random() < 0.15 ? 2 : 1; // czasem wydarzenia dzieją się lawinowo
+        for (let i = 0; i < rounds; i++) {
+          const ev = rollRandomWorldEvent(polls, registry, government, protectedIds);
+          if (!ev) break;
+          polls = ev.polls;
+          ev.notes.forEach((n) => {
+            log.push({ date: fmtDate(newDate), text: `${n.major ? "⚡" : "🌀"} ${n.text}` });
+            if (n.major && prev.gameMode === "player") stopReasons.push(`Ważne wydarzenie na scenie politycznej: ${n.text}`);
+          });
+        }
+      }
 
       if (sameDate(newDate, schedule.sejm) && prevActiveParties.length) {
         const exempt = minorityExemptIds(polls, registry);
@@ -5645,8 +6189,12 @@ export default function PolskiSymulatorPolityczny() {
       if (settings.newPartiesEnabled && Math.random() * 100 < (settings.newPartiesChance ?? 5)) {
         const activeNames = new Set(Object.values(registry).map((p) => p.name));
         const candidates = GLOBAL_PARTY_POOL.filter((p) => !activeNames.has(p.name));
-        if (candidates.length) {
-          const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        // ~35% szans na całkowicie fikcyjną, wygenerowaną partię zamiast tej z puli.
+        const useFictional = !candidates.length || Math.random() < 0.35;
+        if (candidates.length || useFictional) {
+          const pick = useFictional
+            ? generateFictionalParty(activeNames)
+            : candidates[Math.floor(Math.random() * candidates.length)];
           const id = uniqueId(slugify(pick.name), Object.keys(registry));
           const color = randomColor(Object.values(registry).map((p) => p.color));
           registry[id] = { id, name: pick.name, full: pick.full || pick.name, color, bloc: pick.bloc, minority: false };
@@ -5832,6 +6380,89 @@ export default function PolskiSymulatorPolityczny() {
           activeScandals: playerPatch.activeScandals || prev.activeScandals,
         };
       }
+
+      // §9: autonomiczny system kryzysów koalicyjnych działa również w
+      // zwykłym trybie symulacji (nie tylko w trybie kariery gracza).
+      const stabilityWorld = (playerOut && playerOut.world) || prev.world || null;
+      const stabilityPlayer = (playerOut && playerOut.player) || prev.player || null;
+      let governmentStabilityOut = (playerOut && Number.isFinite(playerOut.governmentStability))
+        ? playerOut.governmentStability
+        : computeGovernmentStability(
+            prev.governmentStability,
+            government,
+            sejmSeatsTotal,
+            stabilityWorld,
+            stabilityPlayer,
+            (playerOut && playerOut.playerRelations) || prev.playerRelations || {}
+          );
+
+      const coalitionBeforeCrisis = [...(government.coalition || [])];
+      const instability = clamp((48 - governmentStabilityOut) / 48, 0, 1);
+      const coalitionCrisisChance = instability * 0.10;
+      if (coalitionBeforeCrisis.length > 1 && Math.random() < coalitionCrisisChance) {
+        const departingId = [...coalitionBeforeCrisis]
+          .filter((id) => id !== government.pm)
+          .sort((a, b) => (sejmSeats[a] || 0) - (sejmSeats[b] || 0))[0];
+        if (departingId) {
+          const remaining = coalitionBeforeCrisis.filter((id) => id !== departingId);
+          const remainingSeats = remaining.reduce((sum, id) => sum + (sejmSeats[id] || 0), 0);
+          const majority = majorityFor(sejmSeatsTotal);
+          if (remainingSeats >= majority) {
+            government = {
+              ...government,
+              coalition: remaining,
+              total: remainingSeats,
+              label: `Koalicja po odejściu ${registry[departingId]?.name || departingId}`,
+              stable: true,
+            };
+            log.push({ date: dateLabel, text: `⚠️ Kryzys koalicyjny: ${registry[departingId]?.name || departingId} opuszcza rząd. Pozostali koalicjanci utrzymują większość (${remainingSeats}/${sejmSeatsTotal}).` });
+          } else {
+            government = {
+              ...government,
+              coalition: remaining.length ? remaining : [government.pm].filter(Boolean),
+              total: remainingSeats,
+              label: `Rząd mniejszościowy po odejściu ${registry[departingId]?.name || departingId}`,
+              stable: false,
+            };
+            log.push({ date: dateLabel, text: `🚨 Rozpad większości: ${registry[departingId]?.name || departingId} opuszcza koalicję. Rząd traci większość (${remainingSeats}/${sejmSeatsTotal}) i działa jako mniejszościowy.` });
+            stopReasons.push("Rozpad koalicji — rząd utracił większość parlamentarną");
+          }
+          governmentHistory = [...governmentHistory];
+          const lastGovernmentPeriod = governmentHistory[governmentHistory.length - 1];
+          if (lastGovernmentPeriod) {
+            governmentHistory[governmentHistory.length - 1] = { ...lastGovernmentPeriod, to: { ...newDate } };
+          }
+          governmentHistory.push({
+            from: { ...newDate }, to: null, label: government.label,
+            coalition: [...(government.coalition || [])], pm: government.pm,
+          });
+          governmentStabilityOut = clamp(governmentStabilityOut - (remainingSeats >= majority ? 12 : 24), 0, 100);
+        }
+      }
+
+      // Przy skrajnie niskiej stabilności premier może podać rząd do dymisji.
+      // Nowy gabinet powstaje na bazie aktualnego układu mandatów.
+      if (governmentStabilityOut < 12 && Math.random() < 0.18) {
+        const previousPm = government.pm;
+        const replacement = formGovernment(sejmSeats, [], Object.values(registry), majorityFor(sejmSeatsTotal));
+        if (replacement && replacement.pm) {
+          government = replacement;
+          governmentHistory = [...governmentHistory];
+          const lastGovernmentPeriod = governmentHistory[governmentHistory.length - 1];
+          if (lastGovernmentPeriod) {
+            governmentHistory[governmentHistory.length - 1] = { ...lastGovernmentPeriod, to: { ...newDate } };
+          }
+          governmentHistory.push({
+            from: { ...newDate }, to: null, label: government.label,
+            coalition: [...(government.coalition || [])], pm: government.pm,
+          });
+          log.push({ date: dateLabel, text: `🏛️ Dymisja rządu premiera ${registry[previousPm]?.name || previousPm || "—"}. Po negocjacjach powstaje nowy gabinet: ${government.label}.` });
+          stopReasons.push("Dymisja rządu i powołanie nowego gabinetu");
+          governmentStabilityOut = clamp(governmentStabilityOut + 22, 0, 100);
+        }
+      }
+
+      playerOut = { ...playerOut, governmentStability: governmentStabilityOut };
 
       const nextState = {
         ...prev,
@@ -6266,13 +6897,14 @@ export default function PolskiSymulatorPolityczny() {
     return (
       <SetupScreen
         onStart={(config) => {
+          if (config.gameMode === "player" && !isPlayerModeUnlocked()) return;
           setState(buildInitialState(config));
           setActiveTab("panel");
         }}
         autosave={autosave}
         saves={saves}
         onContinueAutosave={() => {
-          if (autosave) {
+          if (autosave && requirePlayerModeAccess(autosave)) {
             setState(autosave);
             setActiveTab("panel");
           }
@@ -6524,7 +7156,7 @@ export default function PolskiSymulatorPolityczny() {
         {activeTab === "panel" && (
         <>
         {/* KARTY STATUSU */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
             <div className="flex items-center gap-2 text-slate-400 text-xs uppercase tracking-wide mb-2">
               <Landmark size={14} /> Większość rządząca
@@ -6542,6 +7174,26 @@ export default function PolskiSymulatorPolityczny() {
             </div>
             <p className="text-lg font-semibold text-slate-50">{state.president.name}</p>
             <p className="text-sm text-slate-400 mt-1">{state.president.note}</p>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+            <div className="flex items-center gap-2 text-slate-400 text-xs uppercase tracking-wide mb-2">
+              <Sparkles size={14} /> Stabilność rządu
+            </div>
+            {(() => {
+              const stability = Number.isFinite(state.governmentStability) ? state.governmentStability : 50;
+              const tone = stability >= 60 ? "bg-emerald-500" : stability >= 30 ? "bg-amber-500" : "bg-red-500";
+              const label = stability >= 60 ? "Rząd stabilny" : stability >= 30 ? "Podwyższone ryzyko kryzysu" : "Wysokie ryzyko rozpadu";
+              return (
+                <>
+                  <p className="text-2xl font-semibold text-slate-50">{Math.round(stability)}%</p>
+                  <div className="h-2 bg-slate-800 rounded-full overflow-hidden mt-2">
+                    <div className={`${tone} h-full rounded-full`} style={{ width: `${stability}%` }} />
+                  </div>
+                  <p className="text-xs text-slate-400 mt-2">{label}</p>
+                </>
+              );
+            })()}
           </div>
 
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
@@ -7050,6 +7702,25 @@ export default function PolskiSymulatorPolityczny() {
                         type="number" min="0" max="100"
                         value={state.settings.newPartiesChance}
                         onChange={(e) => updateSettings({ newPartiesChance: Number(e.target.value) })}
+                        className="w-16 bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-xs text-slate-200"
+                      /> % / miesiąc
+                    </span>
+                  )}
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={state.settings?.randomEventsEnabled !== false}
+                    onChange={(e) => updateSettings({ randomEventsEnabled: e.target.checked })}
+                    className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-800 accent-red-600"
+                  />
+                  Nieprzewidywalne wydarzenia losowe (kryzysy, rozłamy, fuzje, „czarne łabędzie”)
+                  {state.settings?.randomEventsEnabled !== false && (
+                    <span className="flex items-center gap-1.5 ml-2">
+                      <input
+                        type="number" min="0" max="100"
+                        value={state.settings?.randomEventsChance ?? 18}
+                        onChange={(e) => updateSettings({ randomEventsChance: Number(e.target.value) })}
                         className="w-16 bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-xs text-slate-200"
                       /> % / miesiąc
                     </span>
