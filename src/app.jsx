@@ -7861,6 +7861,18 @@ export default function PolskiSymulatorPolityczny() {
 
         <div className="mt-6 flex justify-center">
           <a
+            href="https://tipply.pl/@supekolo"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-5 py-3 text-sm font-semibold text-emerald-300 transition-colors hover:border-emerald-400 hover:bg-emerald-500/20 hover:text-emerald-200 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2 focus:ring-offset-slate-950"
+          >
+            💰 Wesprzyj projekt na Tipply
+            <ChevronRight size={16} />
+          </a>
+        </div>
+
+        <div className="mt-6 flex justify-center">
+          <a
             href="https://dsj4hillarchitect.tiiny.site/"
             target="_blank"
             rel="noopener noreferrer"
